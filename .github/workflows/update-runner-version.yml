@@ -1,0 +1,240 @@
+name: Update Runner Version
+
+# Watches actions/runner for new releases. When one lands, bumps RUNNER_VERSION in
+# both Dockerfiles and cuts a tag mirroring the upstream runner version
+# (runner 2.336.0 -> tag v2.336.0), then publishes both images to GHCR.
+#
+# The publish workflows are invoked as reusable workflows rather than relying on
+# the tag push: pushes made with GITHUB_TOKEN do not trigger other workflows.
+
+on:
+  schedule:
+    # Mondays at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      runner_version:
+        description: "Runner version to pin (defaults to the latest actions/runner release)"
+        required: false
+        type: string
+      force:
+        description: "Re-publish images for the pinned version even if it is unchanged"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-runner-version
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check for a new runner release
+    runs-on: ubuntu-latest
+    outputs:
+      needs_bump: ${{ steps.compare.outputs.needs_bump }}
+      tag_exists: ${{ steps.compare.outputs.tag_exists }}
+      should_release: ${{ steps.compare.outputs.should_release }}
+      should_publish: ${{ steps.compare.outputs.should_publish }}
+      runner_version: ${{ steps.compare.outputs.runner_version }}
+      current_version: ${{ steps.compare.outputs.current_version }}
+      tag: ${{ steps.compare.outputs.tag }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compare pinned runner version against upstream
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.runner_version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_VERSION}" ]; then
+            runner_version="${INPUT_VERSION#v}"
+          else
+            runner_version="$(gh api repos/actions/runner/releases/latest --jq .tag_name)"
+            runner_version="${runner_version#v}"
+          fi
+
+          if ! printf '%s' "${runner_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Unexpected runner version format: '${runner_version}'"
+            exit 1
+          fi
+
+          # Release tag tracks the upstream runner tag 1:1.
+          tag="v${runner_version}"
+
+          read_pinned() {
+            sed -n 's/^ARG RUNNER_VERSION="\(.*\)"$/\1/p' "$1" | head -1
+          }
+          linux_version="$(read_pinned docker/linux/Dockerfile)"
+          mac_version="$(read_pinned docker/mac/Dockerfile)"
+
+          if [ -z "${linux_version}" ] || [ -z "${mac_version}" ]; then
+            echo "::error::Could not read ARG RUNNER_VERSION from one or both Dockerfiles"
+            exit 1
+          fi
+
+          current_version="${linux_version}"
+          if [ "${linux_version}" != "${mac_version}" ]; then
+            echo "::warning::Dockerfiles disagree (linux=${linux_version}, mac=${mac_version}); both will be pinned to ${runner_version}"
+            current_version="${linux_version} / ${mac_version}"
+          fi
+
+          needs_bump=false
+          if [ "${linux_version}" != "${runner_version}" ] || [ "${mac_version}" != "${runner_version}" ]; then
+            needs_bump=true
+          fi
+
+          tag_exists=false
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_exists=true
+          fi
+
+          # force re-publishes the current version; without it, only a version change ships.
+          should_publish="${needs_bump}"
+          if [ "${FORCE}" = "true" ]; then
+            should_publish=true
+          fi
+
+          # Cut a tag when the version moved, or when we must publish but no tag exists yet.
+          should_release=false
+          if [ "${needs_bump}" = "true" ] \
+            || { [ "${should_publish}" = "true" ] && [ "${tag_exists}" = "false" ]; }; then
+            should_release=true
+          fi
+
+          {
+            echo "needs_bump=${needs_bump}"
+            echo "tag_exists=${tag_exists}"
+            echo "should_release=${should_release}"
+            echo "should_publish=${should_publish}"
+            echo "runner_version=${runner_version}"
+            echo "current_version=${current_version}"
+            echo "tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Runner version check"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Pinned | \`${current_version}\` |"
+            echo "| Upstream latest | \`${runner_version}\` |"
+            echo "| Needs bump | \`${needs_bump}\` |"
+            echo "| Will publish | \`${should_publish}\` |"
+            if [ "${should_publish}" = "true" ]; then
+              echo "| Release tag | \`${tag}\` |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Bump, tag and release
+    needs: check
+    if: needs.check.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Guard against a stale existing tag
+        if: needs.check.outputs.tag_exists == 'true' && needs.check.outputs.needs_bump == 'true'
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+          RUNNER_VERSION: ${{ needs.check.outputs.runner_version }}
+        run: |
+          echo "::error::Tag ${TAG} already exists but the Dockerfiles are not pinned to ${RUNNER_VERSION}."
+          echo "::error::Delete the tag or correct the pin manually, then re-run."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Pin new runner version
+        env:
+          RUNNER_VERSION: ${{ needs.check.outputs.runner_version }}
+        run: |
+          set -euo pipefail
+          for dockerfile in docker/linux/Dockerfile docker/mac/Dockerfile; do
+            sed -i -E "s|^ARG RUNNER_VERSION=\".*\"$|ARG RUNNER_VERSION=\"${RUNNER_VERSION}\"|" "${dockerfile}"
+            grep -E '^ARG RUNNER_VERSION=' "${dockerfile}"
+          done
+
+      - name: Commit, tag and push
+        env:
+          RUNNER_VERSION: ${{ needs.check.outputs.runner_version }}
+          TAG: ${{ needs.check.outputs.tag }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- docker; then
+            echo "No Dockerfile changes to commit; tagging current HEAD."
+          else
+            git add docker/linux/Dockerfile docker/mac/Dockerfile
+            git commit -m "chore(runner): bump actions runner to ${RUNNER_VERSION}"
+            git push origin "HEAD:${BRANCH}"
+          fi
+
+          git tag -a "${TAG}" -m "Actions runner ${RUNNER_VERSION}"
+          git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNNER_VERSION: ${{ needs.check.outputs.runner_version }}
+          TAG: ${{ needs.check.outputs.tag }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat > "${RUNNER_TEMP}/notes.md" <<EOF
+          Tracks [actions/runner](https://github.com/actions/runner/releases/tag/v${RUNNER_VERSION}) \`${RUNNER_VERSION}\`.
+
+          Images:
+
+          - \`${IMAGE}:${TAG}\` / \`${IMAGE}:latest\` (linux/amd64)
+          - \`${IMAGE}:${TAG}-arm64\` / \`${IMAGE}:latest-arm64\` (linux/arm64)
+          EOF
+
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+
+  publish-linux:
+    name: Publish linux image
+    needs: [check, release]
+    if: >-
+      always()
+      && needs.check.outputs.should_publish == 'true'
+      && needs.release.result != 'failure'
+      && needs.release.result != 'cancelled'
+    uses: ./.github/workflows/publish-linux-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.check.outputs.tag }}
+
+  publish-mac:
+    name: Publish mac image
+    needs: [check, release]
+    if: >-
+      always()
+      && needs.check.outputs.should_publish == 'true'
+      && needs.release.result != 'failure'
+      && needs.release.result != 'cancelled'
+    uses: ./.github/workflows/publish-mac-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.check.outputs.tag }}

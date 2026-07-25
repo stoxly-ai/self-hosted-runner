@@ -3,14 +3,14 @@
 Dockerized GitHub Actions self-hosted runners for Linux (x64) and macOS (ARM64). Deploy in minutes, scale with replicas, deregister cleanly on shutdown.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/youssefbrr/self-hosted-runner?style=social)](https://github.com/youssefbrr/self-hosted-runner/stargazers)
+[![GitHub Stars](https://img.shields.io/github/stars/stoxly-ai/self-hosted-runner?style=social)](https://github.com/stoxly-ai/self-hosted-runner/stargazers)
 
 ---
 
 ## Quick Start
 
 ```sh
-git clone https://github.com/youssefbrr/self-hosted-runner.git
+git clone https://github.com/stoxly-ai/self-hosted-runner.git
 cd self-hosted-runner
 cp .env.example .env        # fill in REPO, REG_TOKEN, NAME
 ```
@@ -36,8 +36,8 @@ Both variants support pre-built images from GHCR. By default, `docker-compose up
 
 | Variant | Image | Tag |
 |---------|-------|-----|
-| **Linux (x64)** | `ghcr.io/youssefbrr/self-hosted-runner` | `latest` |
-| **macOS / ARM64** | `ghcr.io/youssefbrr/self-hosted-runner` | `latest-arm64` |
+| **Linux (x64)** | `ghcr.io/stoxly-ai/self-hosted-runner` | `latest` |
+| **macOS / ARM64** | `ghcr.io/stoxly-ai/self-hosted-runner` | `latest-arm64` |
 
 | Mode | How | When to use |
 |------|-----|-------------|
@@ -215,7 +215,7 @@ Contributions welcome. Please:
 3. Test your change by actually spinning up the container
 4. Open a pull request with a clear description of what and why
 
-For bugs or feature requests, [open an issue](https://github.com/youssefbrr/self-hosted-runner/issues).
+For bugs or feature requests, [open an issue](https://github.com/stoxly-ai/self-hosted-runner/issues).
 
 ---
 
