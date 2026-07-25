@@ -1,6 +1,6 @@
 FROM --platform=linux/arm64 ubuntu:24.04
 
-ARG RUNNER_VERSION="2.331.0"
+ARG RUNNER_VERSION="2.336.0"
 
 # Add a user for the runner
 RUN useradd -m -s /bin/bash runner
