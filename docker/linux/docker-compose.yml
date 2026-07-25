@@ -27,11 +27,10 @@ services:
       start_period: 40s
     deploy:
       mode: replicated
-      # Must stay 1: every replica registers with the same NAME from .env, so
-      # they would repeatedly displace each other. To run several runners,
-      # start one compose project per runner with its own NAME
-      # (`docker compose -p runner-2 --env-file .env.runner-2 -f ... up -d`).
-      replicas: 1
+      # Leave NAME unset in .env when running more than one replica — each
+      # runner then self-registers under its container hostname, which Docker
+      # makes unique. Setting NAME pins every replica to the same identity.
+      replicas: 2
       resources:
         limits:
           cpus: '0.5'

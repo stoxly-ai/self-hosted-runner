@@ -7,7 +7,6 @@ RUNNER_DIR="/home/runner/actions-runner"
 
 : "${REPO:?REPO env var required}"
 : "${REG_TOKEN:?REG_TOKEN env var required}"
-: "${NAME:?NAME env var required}"
 
 # ---------------------------------------------------------------------------
 # Stage 1 — root. Grant Docker access, then drop to the unprivileged runner.
@@ -76,8 +75,13 @@ fi
 
 cd "${RUNNER_DIR}" || exit 1
 
-CONFIG_ARGS="--url https://github.com/${REPO} --token ${REG_TOKEN} --name ${NAME} --unattended --replace"
+CONFIG_ARGS="--url https://github.com/${REPO} --token ${REG_TOKEN} --unattended --replace"
 
+# Leave NAME unset to let the runner default to the container hostname, which
+# Docker makes unique per container — that is what allows deploy.replicas > 1.
+# Setting NAME pins every replica to the same identity, so only use it when
+# running a single runner.
+[ -n "${NAME:-}" ]         && CONFIG_ARGS="${CONFIG_ARGS} --name ${NAME}"
 [ -n "${LABELS:-}" ]       && CONFIG_ARGS="${CONFIG_ARGS} --labels ${LABELS}"
 [ -n "${RUNNER_GROUP:-}" ] && CONFIG_ARGS="${CONFIG_ARGS} --runnergroup ${RUNNER_GROUP}"
 [ -n "${WORK_DIR:-}" ]     && CONFIG_ARGS="${CONFIG_ARGS} --work ${WORK_DIR}"

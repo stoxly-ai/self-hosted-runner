@@ -12,7 +12,7 @@ Dockerized GitHub Actions self-hosted runners for Linux (x64) and macOS (ARM64).
 ```sh
 git clone https://github.com/stoxly-ai/self-hosted-runner.git
 cd self-hosted-runner
-cp .env.example .env        # fill in REPO, REG_TOKEN, NAME
+cp .env.example .env        # fill in REPO and REG_TOKEN
 ```
 
 **Linux (x64)**
@@ -52,7 +52,7 @@ Both variants support pre-built images from GHCR. By default, `docker-compose up
 
 ## Features
 
-- **Zero-config start** — set 3 env vars and run
+- **Zero-config start** — set 2 env vars and run
 - **Clean shutdown** — SIGINT/SIGTERM deregisters the runner automatically
 - **Two Docker modes** — host socket mount, or an isolated Docker-in-Docker sidecar
 - **Ephemeral mode** — run once and self-destruct (`EPHEMERAL=true`)
@@ -110,7 +110,7 @@ when the host has no daemon to share.
 ### Running in DinD mode
 
 ```sh
-cp .env.example .env        # fill in REPO, REG_TOKEN, NAME
+cp .env.example .env        # fill in REPO and REG_TOKEN
 
 # Linux (x64)
 docker compose -f docker/linux/docker-compose.dind.yml up -d
@@ -183,12 +183,12 @@ Copy `.env.example` to `.env` and set your values. The `.env` file is gitignored
 |----------|-------------|
 | `REPO` | `owner/repo` for repo-level or `owner` for org-level runners |
 | `REG_TOKEN` | Registration token from GitHub Settings (expires in 1 hour) |
-| `NAME` | Display name shown in GitHub Actions UI |
 
 ### Optional
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `NAME` | _(container hostname)_ | Display name in the GitHub UI. Leave unset for `replicas > 1` — see [Scaling](#scaling). |
 | `LABELS` | _(none)_ | Comma-separated labels, e.g. `self-hosted,linux,x64,gpu` |
 | `RUNNER_GROUP` | _(default)_ | Runner group name — org/enterprise only |
 | `WORK_DIR` | `_work` | Workspace directory inside the container. Set by the DinD compose files — don't override it there. |
@@ -238,14 +238,26 @@ runs-on: [self-hosted, linux, gpu]
 
 ## Scaling
 
-Every runner must register under a **unique** `NAME`, so `deploy.replicas` can't
-be raised on its own — the replicas would repeatedly displace one another in
-GitHub. Run one compose project per runner instead:
+Leave `NAME` unset and raise `deploy.replicas`. Each runner then registers under
+its container hostname, which Docker makes unique per container, so replicas
+never collide:
+
+```yaml
+deploy:
+  replicas: 4       # 4 concurrent runners, each self-named
+```
+
+Set `NAME` only when running a **single** runner and you want a specific label
+in the GitHub UI — a fixed `NAME` pins every replica to the same identity, and
+they will displace one another.
+
+The DinD compose files are the exception: keep them at one replica. `WORK_DIR`
+there is a volume shared with the dind sidecar at a fixed path, so a second
+replica would run jobs out of the same `_work` tree. Add capacity with another
+compose project instead:
 
 ```sh
-# .env.runner-1 and .env.runner-2 differ only in NAME
-docker compose -p runner-1 --env-file .env.runner-1 -f docker/linux/docker-compose.yml up -d
-docker compose -p runner-2 --env-file .env.runner-2 -f docker/linux/docker-compose.yml up -d
+docker compose -p runner-2 -f docker/linux/docker-compose.dind.yml up -d
 ```
 
 GitHub distributes jobs across all registered runners automatically. Tune each

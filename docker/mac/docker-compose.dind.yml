@@ -79,9 +79,10 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Single runner: NAME comes from .env and must be unique per runner. To run
-    # several, start one compose project per runner with its own NAME
-    # (`docker compose -p runner-2 --env-file .env.runner-2 -f ... up -d`).
+    # Keep this at one replica. Unlike the socket-mount compose file, WORK_DIR
+    # here is a volume shared with dind at a fixed path, so a second replica
+    # would run jobs out of the same _work tree and clash on job directories.
+    # To add runners, start another compose project (`docker compose -p ...`).
     deploy:
       resources:
         limits:
