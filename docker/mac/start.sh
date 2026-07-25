@@ -88,7 +88,16 @@ CONFIG_ARGS="--url https://github.com/${REPO} --token ${REG_TOKEN} --unattended 
 [ "${EPHEMERAL:-}" = "true" ]            && CONFIG_ARGS="${CONFIG_ARGS} --ephemeral"
 [ "${DISABLE_AUTO_UPDATE:-}" = "true" ]  && CONFIG_ARGS="${CONFIG_ARGS} --disableupdate"
 
-./config.sh ${CONFIG_ARGS} || exit 1
+# The container filesystem survives a restart, so a runner that registered
+# successfully once still has .runner on the next start and config.sh refuses
+# to run again ("Cannot configure the runner because it is already
+# configured"). The stored credentials stay valid long after REG_TOKEN's
+# one-hour expiry, so reuse them instead of trying to re-register.
+if [ -f .runner ]; then
+    echo "Runner already configured; reusing the existing registration."
+else
+    ./config.sh ${CONFIG_ARGS} || exit 1
+fi
 
 cleanup() {
   echo "Removing runner..."
