@@ -1,3 +1,9 @@
+# Socket mount (Docker-out-of-Docker) — Linux / x64
+#
+# Jobs drive the HOST's Docker daemon through the bind-mounted socket. Fast and
+# shares the host image cache, but a job can start a privileged container on the
+# host, so it is effectively root on the host. For isolation use the sidecar
+# daemon in docker-compose.dind.yml instead.
 services:
   runner:
     image: ghcr.io/stoxly-ai/self-hosted-runner:latest
@@ -21,7 +27,11 @@ services:
       start_period: 40s
     deploy:
       mode: replicated
-      replicas: 2
+      # Must stay 1: every replica registers with the same NAME from .env, so
+      # they would repeatedly displace each other. To run several runners,
+      # start one compose project per runner with its own NAME
+      # (`docker compose -p runner-2 --env-file .env.runner-2 -f ... up -d`).
+      replicas: 1
       resources:
         limits:
           cpus: '0.5'

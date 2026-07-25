@@ -24,9 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev python3-pip python3-venv ssh sudo \
     && rm -rf /var/lib/apt/lists/*
 
-# Add docker user to docker group and allow GID fix at startup
-RUN usermod -aG docker docker \
-    && echo "docker ALL=(root) NOPASSWD: /usr/sbin/groupmod" >> /etc/sudoers
 # Set up the actions runner
 RUN cd /home/docker && mkdir actions-runner && cd actions-runner \
     && curl -o actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz -L https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz \
@@ -38,8 +35,9 @@ RUN chown -R docker /home/docker && /home/docker/actions-runner/bin/installdepen
 # Copy the start script and make it executable
 COPY --chmod=+x start.sh /start.sh
 
-# Switch to docker user
-USER docker
+# NOTE: no USER directive on purpose. start.sh needs root to align the mounted
+# Docker socket's group, then drops to the unprivileged `docker` user via
+# setpriv before ever touching config.sh/run.sh.
 
 # Define the entrypoint
 ENTRYPOINT ["/start.sh"]

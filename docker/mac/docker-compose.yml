@@ -1,3 +1,9 @@
+# Socket mount (Docker-out-of-Docker) — macOS / ARM64
+#
+# Jobs drive the HOST's Docker daemon through the bind-mounted socket. Fast and
+# shares the host image cache, but a job can start a privileged container on the
+# host, so it is effectively root on the host. For isolation use the sidecar
+# daemon in docker-compose.dind.yml instead.
 services:
   runner:
     image: ghcr.io/stoxly-ai/self-hosted-runner:latest-arm64

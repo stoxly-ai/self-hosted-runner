@@ -1,0 +1,98 @@
+# Docker-in-Docker (DinD) — Linux / x64
+#
+# A private dockerd runs in the `dind` sidecar and the runner talks to it over
+# TLS. The host's /var/run/docker.sock is NOT mounted, so jobs cannot reach the
+# host daemon (no container escape, no clobbering host images).
+#
+#   docker compose -f docker/linux/docker-compose.dind.yml up -d
+#
+# Trade-off vs docker-compose.yml (socket mount): images and layer cache live
+# in the `dind-storage` volume instead of being shared with the host, so the
+# first build after `down -v` is cold.
+name: gh-runner-dind
+
+services:
+  dind:
+    image: docker:28-dind
+    # Required — dockerd needs to manage cgroups, netns and iptables.
+    privileged: true
+    restart: always
+    networks:
+      default:
+        # dind's self-signed server cert is issued for the name "docker", so the
+        # runner must dial tcp://docker:2376 or TLS verification fails with
+        # "certificate is valid for docker, ..., not dind".
+        aliases:
+          - docker
+    environment:
+      # Makes dind generate a CA plus server/client certs and listen on 2376.
+      DOCKER_TLS_CERTDIR: /certs
+      # Uncomment if the host's filesystem can't back overlay2 (e.g. ZFS):
+      # DOCKER_DRIVER: vfs
+    volumes:
+      - docker-certs-ca:/certs/ca
+      - docker-certs-client:/certs/client
+      - dind-storage:/var/lib/docker
+      # Mounted at the SAME path as in the runner. Without this, a job doing
+      # `docker run -v $PWD:/src` would bind a path that only exists in the
+      # runner container and silently get an empty directory.
+      - runner-work:/home/docker/_work
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  runner:
+    image: ghcr.io/stoxly-ai/self-hosted-runner:latest
+    # Uncomment to build locally instead of pulling from GHCR
+    # build: .
+    restart: always
+    depends_on:
+      dind:
+        condition: service_healthy
+    env_file:
+      - ../../.env
+    # These take precedence over .env — do not set them there.
+    environment:
+      DOCKER_HOST: tcp://docker:2376
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /certs/client
+      WORK_DIR: /home/docker/_work
+    volumes:
+      - docker-certs-client:/certs/client:ro
+      - runner-work:/home/docker/_work
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "run.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Single runner: NAME comes from .env and must be unique per runner. To run
+    # several, start one compose project per runner with its own NAME
+    # (`docker compose -p runner-2 --env-file .env.runner-2 -f ... up -d`).
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+volumes:
+  docker-certs-ca:
+  docker-certs-client:
+  dind-storage:
+  runner-work:
