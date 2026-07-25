@@ -263,17 +263,46 @@ deploy:
 
 ## Publishing Images
 
-GitHub Actions workflows automatically build and publish both images to GHCR on version tag pushes (`v*`).
+GitHub Actions workflows automatically build and publish both images to GHCR on
+version tag pushes (`v*`). The tag name becomes the image tag verbatim, so it
+must be a valid Docker tag — `+` is not allowed.
+
+### Tag scheme
+
+| Tag | Cut by | Means |
+|-----|--------|-------|
+| `v2.337.0` | `update-runner-version.yml`, automatically | `actions/runner` was bumped to 2.337.0 |
+| `v2.337.0-1`, `-2`, … | a human | image-only change on top of runner 2.337.0 |
+
+Bare `v<runner_version>` tags mirror the upstream runner release. When the image
+changes but the runner version doesn't — a Dockerfile or `start.sh` fix —
+append an incrementing revision instead.
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+git tag -a v2.337.0-1 -m "…"
+git push origin v2.337.0-1
 ```
+
+**Never re-point a tag that has already been pushed.** Republishing the same
+name leaves every host that already pulled it running stale code: `docker
+compose up -d` does not re-check the registry for an image tag it already has
+locally. A fresh tag has no local cache anywhere, so it is always pulled.
 
 | Image | Tag | Platform |
 |-------|-----|----------|
-| `ghcr.io/<owner>/self-hosted-runner` | `latest` / `v1.0.0` | linux/amd64 |
-| `ghcr.io/<owner>/self-hosted-runner` | `latest-arm64` / `v1.0.0-arm64` | linux/arm64 |
+| `ghcr.io/<owner>/self-hosted-runner` | `latest` / `v2.337.0-1` | linux/amd64 |
+| `ghcr.io/<owner>/self-hosted-runner` | `latest-arm64` / `v2.337.0-1-arm64` | linux/arm64 |
+
+### Upgrading a running runner
+
+`latest` is a moving target, so `up -d` alone won't pick up a new build:
+
+```sh
+docker compose -f docker/linux/docker-compose.yml pull
+docker compose -f docker/linux/docker-compose.yml up -d --force-recreate
+```
+
+Pinning the revision tag instead of `latest` avoids the ambiguity entirely.
 
 ---
 
