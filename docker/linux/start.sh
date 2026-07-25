@@ -82,6 +82,13 @@ CONFIG_ARGS="--url https://github.com/${REPO} --token ${REG_TOKEN} --unattended 
 # Setting NAME pins every replica to the same identity, so only use it when
 # running a single runner.
 [ -n "${NAME:-}" ]         && CONFIG_ARGS="${CONFIG_ARGS} --name ${NAME}"
+
+if [ -n "${NAME:-}" ]; then
+    echo "NOTE: NAME is set to '${NAME}'. Every container sharing this value registers as"
+    echo "      the same runner and evicts the previous one, which then fails with"
+    echo "      'the runner registration has been deleted from the server'. Unset NAME"
+    echo "      when running more than one replica."
+fi
 [ -n "${LABELS:-}" ]       && CONFIG_ARGS="${CONFIG_ARGS} --labels ${LABELS}"
 [ -n "${RUNNER_GROUP:-}" ] && CONFIG_ARGS="${CONFIG_ARGS} --runnergroup ${RUNNER_GROUP}"
 [ -n "${WORK_DIR:-}" ]     && CONFIG_ARGS="${CONFIG_ARGS} --work ${WORK_DIR}"
@@ -108,3 +115,16 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
 ./run.sh & wait $!
+RC=$?
+
+# run.sh retries transient failures itself, so a non-zero exit here is terminal.
+# The usual cause is the server-side registration having been deleted — most
+# often by another container registering under the same NAME — which leaves
+# .runner permanently unusable. Discard it so the next start registers afresh
+# rather than replaying the identical failure forever.
+if [ "${RC}" -ne 0 ]; then
+    echo "Runner exited with status ${RC}; discarding local configuration so the next start re-registers."
+    rm -f .runner .credentials .credentials_rsaparams
+fi
+
+exit "${RC}"
