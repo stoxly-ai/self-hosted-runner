@@ -9,8 +9,8 @@ name: Update Runner Version
 
 on:
   schedule:
-    # Mondays at 06:00 UTC
-    - cron: "0 6 * * 1"
+    # Daily at 06:00 UTC
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       runner_version:
