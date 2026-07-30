@@ -1,0 +1,13 @@
+{
+  "builder": {
+    "gc": {
+      "enabled": true,
+      "defaultReservedSpace": "5GB",
+      "defaultMaxUsedSpace": "15GB"
+    }
+  },
+  "default-address-pools": [
+    { "base": "10.100.0.0/16", "size": 24 }
+  ],
+  "max-concurrent-downloads": 6
+}

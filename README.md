@@ -70,12 +70,16 @@ docker/
 │   ├── Dockerfile               user: docker, workdir: /home/docker/actions-runner
 │   ├── docker-compose.yml       host socket mount (DooD)
 │   ├── docker-compose.dind.yml  isolated dockerd sidecar (DinD)
+│   ├── dind-daemon.json         per-stack daemon config (GC budget, pools)
 │   └── start.sh
 └── mac/            Ubuntu 24.04, ARM64
     ├── Dockerfile               user: runner, workdir: /home/runner/actions-runner
     ├── docker-compose.yml       host socket mount (DooD)
     ├── docker-compose.dind.yml  isolated dockerd sidecar (DinD)
+    ├── dind-daemon.json         per-stack daemon config (GC budget, pools)
     └── start.sh
+scripts/
+└── runner-pool.sh  deploy/scale/upgrade/clean N DinD slots (see Runner pool)
 ```
 
 The pinned runner version lives in `ARG RUNNER_VERSION` in both Dockerfiles and
@@ -118,6 +122,52 @@ docker compose -f docker/linux/docker-compose.dind.yml up -d
 # macOS / ARM64
 docker compose -f docker/mac/docker-compose.dind.yml up -d
 ```
+
+#### Runner pool: one stack per concurrent job
+
+One stack = one runner = one job at a time = one private daemon. To run N jobs
+concurrently, deploy N stacks from the same checkout and `.env`. The
+`scripts/runner-pool.sh` helper manages the whole pool:
+
+```sh
+./scripts/runner-pool.sh up 3      # ensure slots 1..3 run; removes any above 3
+./scripts/runner-pool.sh status    # per-slot containers + busy/idle
+./scripts/runner-pool.sh up 5      # scale up (new slots need a REG_TOKEN <1h old)
+./scripts/runner-pool.sh up 2      # scale down — busy slots are skipped, not killed
+./scripts/runner-pool.sh upgrade   # pull newer images, recreate idle slots
+./scripts/runner-pool.sh down      # stop + deregister everything, keep warm caches
+./scripts/runner-pool.sh clean     # down + delete volumes (asks for confirmation)
+```
+
+It auto-picks the variant for the OS (`--variant linux|mac` to override) and
+refuses to touch a slot that is mid-job unless you pass `--force`. Under the
+hood each slot is just a compose project — the manual equivalent is:
+
+```sh
+docker compose -p runner-1 -f docker/linux/docker-compose.dind.yml up -d
+docker compose -p runner-2 -f docker/linux/docker-compose.dind.yml up -d
+```
+
+Every job then executes against the private daemon of the runner it landed on,
+which is what makes parallel jobs stop interfering with each other — and with
+the host:
+
+- **Builds don't block across jobs.** BuildKit's build graph, cache, and GC
+  lock are per-daemon; two heavy builds proceed independently.
+- **Fixed service ports don't collide.** A job's published ports
+  (`services:` with `5432:5432`, `docker run -p ...`) bind inside its own
+  stack's network namespace — two parallel jobs can both claim 5432, and
+  neither touches the host's port space.
+- **Prunes stay local.** A job running `docker system prune -af` (or a PaaS
+  scheduled cleanup on the host, e.g. Dokploy/Coolify) can no longer delete
+  another job's images or stall its builds.
+- **The host daemon stays clean.** It never executes CI workloads, so
+  anything else it serves (deploy tooling, app containers) behaves as if the
+  runners weren't there.
+
+Per-stack knobs live in `docker/<variant>/dind-daemon.json` (build-cache GC
+budget, address pools, pull concurrency) and in the `deploy.resources` limits
+on the `dind` service (CPU/RAM cap per job's docker workloads).
 
 Verify the runner reached its private daemon:
 
@@ -166,8 +216,12 @@ mode.
 - `privileged: true` on the sidecar is unavoidable — dockerd needs to manage
   cgroups, network namespaces and iptables. It is confined to the sidecar; the
   runner container stays unprivileged.
-- Ports published by a job (`docker run -p 8080:80`) bind inside the `dind`
-  container, not on the host. Reach them from the job as `dind:8080`.
+- Ports published by a job (`docker run -p 8080:80`, workflow `services:`)
+  bind inside the stack's shared network namespace, not on the host. The
+  runner lives in that same namespace (`network_mode: service:dind`), so job
+  steps reach them at `localhost:8080` — exactly what
+  `localhost:${{ job.services.<name>.ports[...] }}` in workflows expects.
+  They are not reachable from outside the stack.
 - If your host filesystem cannot back overlay2 (e.g. ZFS), uncomment
   `DOCKER_DRIVER: vfs` in the `dind` service.
 
@@ -254,7 +308,9 @@ they will displace one another.
 The DinD compose files are the exception: keep them at one replica. `WORK_DIR`
 there is a volume shared with the dind sidecar at a fixed path, so a second
 replica would run jobs out of the same `_work` tree. Add capacity with another
-compose project instead:
+stack instead — this is the recommended pattern, since every stack brings its
+own daemon and jobs stop contending entirely (see
+[Runner pool](#runner-pool-one-stack-per-concurrent-job)):
 
 ```sh
 docker compose -p runner-2 -f docker/linux/docker-compose.dind.yml up -d

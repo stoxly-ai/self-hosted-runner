@@ -2,9 +2,18 @@
 #
 # A private dockerd runs in the `dind` sidecar and the runner talks to it over
 # TLS. The host's /var/run/docker.sock is NOT mounted, so jobs cannot reach the
-# host daemon (no container escape, no clobbering host images).
+# host daemon (no container escape, no clobbering host images) — and jobs never
+# queue on the host daemon's build graph, GC lock, iptables lock, or port
+# space. The host daemon keeps working normally for everything else.
 #
-#   docker compose -f docker/mac/docker-compose.dind.yml up -d
+# One stack = one runner = one job at a time = one private daemon. Deploy N
+# stacks to run N jobs concurrently — each `-p` name gets its own volumes:
+#
+#   docker compose -p runner-1 -f docker/mac/docker-compose.dind.yml up -d
+#   docker compose -p runner-2 -f docker/mac/docker-compose.dind.yml up -d
+#
+# Because each job's published ports bind inside its own stack's network
+# namespace, parallel jobs that both ask for e.g. 5432:5432 do not collide.
 #
 # `privileged: true` is honoured inside the Docker Desktop VM on macOS.
 name: gh-runner-dind-arm64
@@ -36,6 +45,9 @@ services:
       # `docker run -v $PWD:/src` would bind a path that only exists in the
       # runner container and silently get an empty directory.
       - runner-work:/home/runner/_work
+      # Bounds this stack's build cache (BuildKit GC) and widens its private
+      # address pool / pull queue — see the file for the knobs.
+      - ./dind-daemon.json:/etc/docker/daemon.json:ro
     healthcheck:
       test: ["CMD", "docker", "info"]
       interval: 10s
@@ -47,6 +59,16 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    # Builds, job containers, and service containers all execute HERE, not in
+    # the runner — this is the cap on what one job can take from the host.
+    deploy:
+      resources:
+        limits:
+          cpus: "3"
+          memory: 8G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
 
   runner:
     image: ghcr.io/stoxly-ai/self-hosted-runner:latest-arm64
@@ -57,6 +79,14 @@ services:
     depends_on:
       dind:
         condition: service_healthy
+    # The runner lives in dind's network namespace, so ports published by job
+    # service containers (`services:` in a workflow, `docker run -p ...`)
+    # appear on the runner's OWN localhost — which is where
+    # `localhost:${{ job.services.<name>.ports[...] }}` expects them. Without
+    # this, those ports bind only inside dind and every services-based job
+    # breaks. (Hostname/UTS stays per-container, so runner self-naming still
+    # works.)
+    network_mode: service:dind
     env_file:
       - ../../.env
     # These take precedence over .env — do not set them there.
@@ -79,10 +109,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    # Keep this at one replica. Unlike the socket-mount compose file, WORK_DIR
-    # here is a volume shared with dind at a fixed path, so a second replica
-    # would run jobs out of the same _work tree and clash on job directories.
-    # To add runners, start another compose project (`docker compose -p ...`).
+    # Keep this at one replica. WORK_DIR is a volume shared with dind at a
+    # fixed path, so a second replica would run jobs out of the same _work
+    # tree and clash on job directories. To add capacity, start another stack
+    # (`docker compose -p runner-2 ... up -d`) — see the header comment.
+    # These limits cover job STEP processes; docker workloads are capped on
+    # the dind service above.
     deploy:
       resources:
         limits:
