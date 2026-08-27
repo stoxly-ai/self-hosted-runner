@@ -1,6 +1,6 @@
 FROM --platform=linux/arm64 ubuntu:24.04
 
-ARG RUNNER_VERSION="2.336.0"
+ARG RUNNER_VERSION="2.337.0"
 ARG DEBIAN_FRONTEND=noninteractive
 
 # Add a user for the runner
